@@ -1,4 +1,4 @@
-.PHONY: setup lint typecheck test guardrails verify-phase ratchet db.up db.down
+.PHONY: setup lint typecheck test guardrails verify-phase ratchet db.up db.down db.migrate db.reset db.seed
 
 UV := uv
 PY_DIR := py
@@ -50,3 +50,12 @@ db.up:
 
 db.down:
 	docker compose down
+
+db.migrate:
+	cd $(PY_DIR) && $(UV) run python -m ingest.migrate migrate
+
+db.reset:
+	cd $(PY_DIR) && $(UV) run python -m ingest.migrate reset
+
+db.seed:
+	cd $(PY_DIR) && $(UV) run python -m ingest.sources.sec_tickers

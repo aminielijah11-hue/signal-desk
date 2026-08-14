@@ -7,6 +7,22 @@ on:
 jobs:
   guardrails:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: signal_desk
+          POSTGRES_PASSWORD: signal_desk_ci
+          POSTGRES_DB: signal_desk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U signal_desk -d signal_desk"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://signal_desk:signal_desk_ci@localhost:5432/signal_desk
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +45,9 @@ jobs:
       - name: Install Node deps
         working-directory: app
         run: npm ci
+
+      - name: Apply migrations (CI-local throwaway Postgres, not Neon)
+        run: make db.migrate
 
       - name: Lint (ruff, black, eslint)
         run: make lint

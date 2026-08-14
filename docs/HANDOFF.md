@@ -5,6 +5,132 @@ assume the next phase is a different engineer with zero memory of this one.
 
 ---
 
+## Phase 2 — Schema (complete)
+
+**What was built:**
+
+- Real Postgres, not Docker: the build machine has no Docker/Homebrew.
+  User chose to create a Neon (free tier) project now rather than install
+  Docker Desktop or Postgres.app — connection string lives in a local
+  `.env` (gitignored, confirmed via `git check-ignore` before anything
+  touched it), never in a committed file. `.env.example` documents the
+  two required variables (`DATABASE_URL`, `SIGNAL_DESK_CONTACT_EMAIL` —
+  the latter for the SEC-mandated descriptive User-Agent, §3) with
+  placeholder values only.
+- `py/config/env.py`: minimal `.env` loader (no python-dotenv dependency —
+  one job, doesn't need a library).
+- `py/ingest/db.py`: shared `get_connection()` context manager.
+- `db/migrations/0001..0008.sql`: the full §4 data model — all ~27
+  logical tables (issuers through source_disagreement), every constraint
+  §4 specifies by name (insider_trades provenance/price/shares checks,
+  congress_trades disclosed_at/amount_high/amount_low/UNIQUE, prices_daily
+  high≥low/open/close), all named indexes. `prices_daily` is genuinely
+  partitioned by year (`PARTITION BY RANGE (d)`, 2014–2027 partitions),
+  not just commented as if it were.
+- **Strengthened one constraint beyond the spec's literal text**: §4
+  writes the OCR gate as `CHECK (provenance <> 'ocr' OR needs_review =
+  true)`, but §7.3 constructs `'ocr_low_conf'` rows the same way (always
+  paired with `needs_review=true`) and `NO_OCR_IN_SCORING` treats both
+  values as equally untrusted. Widened to
+  `CHECK (provenance NOT IN ('ocr', 'ocr_low_conf') OR needs_review =
+  true)` — caught by my own test (`test_ocr_low_conf_without_review_is_
+  also_rejected` failed against the literal-spec version, which is what
+  surfaced the gap rather than a hunch).
+- `py/ingest/migrate.py`: tiny numbered-`.sql` runner (`schema_migrations`
+  tracking table, apply-in-filename-order, one transaction per file,
+  idempotent — proven by running `migrate` twice in a row with 0 pending
+  the second time) plus `reset` (`DROP SCHEMA public CASCADE`).
+- `py/ingest/sources/sec_tickers.py`: seeds `issuers` from
+  `sec.gov/files/company_tickers.json` (§3.1). Fetch/parse/validate are
+  separated so parse+validate are unit-tested without hitting the
+  network (`py/tests/test_sec_tickers.py`, 5 tests). Writes to
+  `ingest_log` (running → success/failed) per §11. **Performance fix
+  during this phase**: the first real run did one `INSERT` per row
+  (~7,995 individual round trips to Neon) and took over two minutes;
+  rewrote `upsert_issuers` to batch in chunks of 500 (one multi-row
+  `INSERT ... ON CONFLICT` per chunk), now ~4 seconds. Also cut per-row
+  duplicate-rejection logging (2,401 individual WARNING lines) down to a
+  single summary line with a 5-row sample.
+- `py/tests/test_schema_constraints.py`: 6 live-DB tests against
+  `DATABASE_URL` (Neon locally, CI's own throwaway Postgres in Actions),
+  each on its own connection that rolls back unconditionally in teardown
+  so nothing persists. Covers the mandated OCR-CHECK proof plus its
+  positive control (ocr + needs_review=true must NOT raise), the
+  `ocr_low_conf` case, insider_trades price≥0, and prices_daily
+  high≥low.
+- `.github/workflows/guardrails.yml`: added a `postgres:16-alpine`
+  **service container** (not Neon — CI gets its own ephemeral throwaway
+  DB, so Actions runs never touch the real Neon project or need its
+  secret) plus a `make db.migrate` step before lint/typecheck/test.
+- `Makefile`: `db.migrate`, `db.reset`, `db.seed` — all Python-based
+  (`ingest.migrate`, `ingest.sources.sec_tickers`), no dependency on
+  Docker being installed locally.
+
+**Gate proof (PROMPT.md §12, Phase 2) — with one number changed, see
+"A real acceptance-criterion conflict" below:**
+
+`make verify-phase PHASE=2` runs the full sequence for real against Neon:
+`make db.reset` → `make db.migrate` (8/8 migrations, clean) → `make
+db.seed` → issuers count check → `test_schema_constraints.py`. All five
+steps pass. Full output pasted in the session transcript.
+
+**A real acceptance-criterion conflict (not a bug, resolved with the
+user):** PROMPT.md's literal gate is `SELECT count(*) FROM issuers >
+8000`. Seeding from the exact endpoint §3.1 names produced **7,995–7,998**
+(fluctuates slightly run to run as SEC's live file changes). Verified
+this against the raw unique-CIK count directly (bypassing all of my own
+parsing code) before concluding anything — not a validate()/dedup bug,
+the live source genuinely has fewer entries than whenever the spec text
+was written. Per CONTRACT rule 7 ("acceptance criteria are immutable
+without explicit permission from the user... if a test is genuinely
+wrong, stop and say so"), this was brought to the user rather than
+silently adjusted or worked around (e.g. by padding data, which would
+have violated rule 6 just as badly). **User's explicit decision: lower
+the threshold to `> 7500`.** Encoded as `ISSUER_COUNT_THRESHOLD` in
+`scripts/verify_phase.py` with the reasoning inline, not silently.
+
+**Known defects:** none found this phase beyond the two already fixed
+above (batch upsert, log volume) — both were caught and corrected before
+this HANDOFF entry was written, not left as open items.
+
+**Deliberately deferred:**
+
+- `config/weights.yml` / `config/thresholds.yml` still don't exist —
+  still correctly Phase 9's job.
+- `ticker_aliases` table exists but is empty — §3.2 needs it for
+  congressional asset-name matching, but that's Phase 5, not Phase 2.
+- Docker still isn't installed locally; `docker-compose.yml` remains
+  unexercised. Not needed now that Neon is the answer for both local dev
+  and (eventually) production, per the architecture in §2.
+- Neon/Vercel/Telegram/Resend/Tiingo accounts: only Neon has been created
+  so far (this phase). The rest block later phases only.
+
+**Assumptions made:**
+
+- Table PKs/uniques not explicitly specified in §4's informal notation
+  were chosen directly (e.g. `insider_roles` PK on
+  `(owner_cik, issuer_cik, start_date)`, `ticker_aliases` PK on
+  `(alias, cik, source)`) — reasonable technical decisions per CONTRACT
+  rule 4, not scope creep, since some primary key had to exist and §4
+  didn't specify one for every table.
+- `model_weights` got a partial unique index enforcing at most one
+  `is_active=true` row, because §5.2 refers to "the active model_weights
+  row" as if it's singular — a real constraint the spec's prose implies
+  but the table definition didn't spell out.
+- Migration runner and connection helper live under `ingest/` (not a new
+  top-level `db/` Python package) specifically so they fall under
+  guardrails' `NO_PLACEHOLDER`/`NO_EMPTY_BODY`/`NO_SILENT_EXCEPT`
+  coverage, which CONTRACT.md scopes to `ingest/, scoring/, research/,
+  alerting/, app/` only. A separate `db/` package would have sat outside
+  mechanical enforcement — judged worse given §0.A's whole thesis is
+  "mechanical enforcement over memory."
+
+**Exact next action:** tag `phase-2-complete`, push, confirm CI green
+with the new Postgres service, then start Phase 3 (Prices, technicals,
+calendar).
+
+---
+
 ## Phase 1 — Skeleton + guardrails (complete)
 
 **What was built:**

@@ -69,8 +69,72 @@ def check_phase_1() -> list[tuple[str, bool, str]]:
     return results
 
 
+# Lowered from PROMPT.md §12's literal ">8000" by explicit user decision
+# (see docs/HANDOFF.md Phase 2 entry). The live SEC company_tickers.json
+# endpoint the spec itself names now returns ~7,998 unique CIKs — verified
+# against the raw unique-CIK count directly, not a parsing bug. ">8000"
+# was accurate when the spec text was written and has drifted down since;
+# this is not a weakened acceptance criterion in the sense CONTRACT rule 7
+# forbids (silently editing a test to force a pass) — it's the user
+# explicitly setting a new number after seeing the real data.
+ISSUER_COUNT_THRESHOLD = 7500
+
+_COUNT_ISSUERS_SCRIPT = (
+    "from ingest.db import get_connection\n"
+    "with get_connection() as conn:\n"
+    "    with conn.cursor() as cur:\n"
+    "        cur.execute('SELECT count(*) FROM issuers')\n"
+    "        print(cur.fetchone()[0])\n"
+)
+
+
+def check_phase_2() -> list[tuple[str, bool, str]]:
+    results: list[tuple[str, bool, str]] = []
+
+    for target in ["db.reset", "db.migrate", "db.seed"]:
+        proc = subprocess.run(["make", target], cwd=ROOT, capture_output=True, text=True)
+        detail = target if proc.returncode == 0 else (proc.stdout + proc.stderr)[-500:]
+        results.append((f"make {target} succeeds", proc.returncode == 0, detail))
+
+    count_proc = subprocess.run(
+        ["uv", "run", "python", "-c", _COUNT_ISSUERS_SCRIPT],
+        cwd=ROOT / "py",
+        capture_output=True,
+        text=True,
+    )
+    count = (
+        int(count_proc.stdout.strip())
+        if count_proc.returncode == 0 and count_proc.stdout.strip().isdigit()
+        else -1
+    )
+    results.append(
+        (
+            f"issuers count > {ISSUER_COUNT_THRESHOLD}",
+            count > ISSUER_COUNT_THRESHOLD,
+            f"got {count}" if count >= 0 else (count_proc.stdout + count_proc.stderr)[-500:],
+        )
+    )
+
+    constraint_proc = subprocess.run(
+        ["uv", "run", "pytest", "tests/test_schema_constraints.py", "-q"],
+        cwd=ROOT / "py",
+        capture_output=True,
+        text=True,
+    )
+    results.append(
+        (
+            "test_schema_constraints.py passes (incl. OCR CHECK proof)",
+            constraint_proc.returncode == 0,
+            "py/tests/test_schema_constraints.py",
+        )
+    )
+
+    return results
+
+
 PHASE_CHECKS = {
     1: check_phase_1,
+    2: check_phase_2,
 }
 
 
