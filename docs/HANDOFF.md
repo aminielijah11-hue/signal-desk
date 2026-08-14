@@ -45,44 +45,61 @@ assume the next phase is a different engineer with zero memory of this one.
 - `docker-compose.yml`: local Postgres 16 (not yet started — Docker isn't
   installed on the build machine; see "Known defects" below).
 - `.github/workflows/guardrails.yml`: runs lint + typecheck + test +
-  guardrails on every push/PR, per §11. Not yet exercised on GitHub
-  Actions — no remote repo exists yet (see "Deliberately deferred").
+  guardrails on every push/PR, per §11. **Exercised for real on GitHub
+  Actions — green as of run
+  https://github.com/aminielijah11-hue/signal-desk/actions/runs/31777788778**
+  (took two real failed runs to get there, see "Known defects" below —
+  both are genuine bugs that were found and fixed, not flaked past).
 - Pre-commit hook installed by `make setup`, proven working (it ran and
-  passed during the actual `git commit` for this phase).
+  passed during every actual `git commit` in this phase, including the
+  two fix commits below).
 
-**Gate proof (PROMPT.md §12, Phase 1):**
+**Gate proof (PROMPT.md §12, Phase 1) — all four criteria met:**
 
-```
-make setup && make test && make guardrails
-```
-passes both in the working tree and on a genuinely fresh `git clone` to
-`/tmp` (cloned, ran all three from scratch, cleaned up — not just
-re-running in the dev copy). `make verify-phase PHASE=1` — which chains
-lint → typecheck → test → guardrails → phase-1-specific structural checks
-including the planted-TODO proof — exits 0. Full output pasted in the
-session transcript, not summarized.
+1. `make setup && make test && make guardrails` passes both in the
+   working tree and on a genuinely fresh `git clone` to `/tmp` (cloned,
+   ran all three from scratch, cleaned up).
+2. `make verify-phase PHASE=1` — lint → typecheck → test → guardrails →
+   phase-1 structural checks — exits 0.
+3. **CI green**: real push to `github.com/aminielijah11-hue/signal-desk`
+   (public), Actions run `31777788778` green end to end.
+4. **Guardrails demonstrably fail on a planted TODO**: automated inside
+   `verify_phase.py` (writes a canary file with a `TODO` under
+   `py/ingest/`, confirms `guardrails.py` exits nonzero and names the
+   file, deletes it, confirms `guardrails.py` passes again) — proven on
+   every local run and would equally fail CI if committed, since CI runs
+   the same `make guardrails`.
 
-**Known defects / gaps:**
+**Known defects (found via real CI failures, both fixed and re-verified):**
 
-- **Docker is not installed on this machine.** `docker-compose.yml` exists
-  and is believed correct (standard Postgres 16 service, healthcheck,
-  named volume) but has never actually been run. Phase 2 needs `docker
-  compose up -d` to work before migrations can be tested locally —
-  installing Docker Desktop is a heavier, more invasive action (system
-  daemon/VM) than installing `uv` was, so it wasn't done without asking.
-  Whoever picks up Phase 2 should either get Docker installed on this
-  machine or point `DATABASE_URL` at the real Neon instance for local dev
-  too (once that account exists).
-- CI has never actually run on GitHub — see "Deliberately deferred."
+- **Makefile hardcoded `UV := $(HOME)/.local/bin/uv`.** Worked locally
+  only because that happens to be where this machine's `uv` installer put
+  it; `astral-sh/setup-uv` on the GitHub runner puts it somewhere else on
+  `PATH`. First CI run failed at the `lint` step with `uv: not found`.
+  Fixed to `UV := uv`, relying on `PATH` in both environments — and added
+  `~/.local/bin` to this machine's `~/.zshrc` so local shells match CI's
+  assumption (`uv` on `PATH`, not a guessed absolute path).
+- **`tsc --noEmit` depended on stale local build artifacts.**
+  `app/tsconfig.json` includes `.next/types/**/*.ts`, which is
+  Next-generated and gitignored. Locally it existed only because the
+  initial `create-next-app` scaffold happened to generate it once; CI
+  never had it and failed with `Cannot find name 'LayoutProps'`. Fixed by
+  adding `next typegen` (Next 16's dedicated lightweight route-type
+  generator) as a prerequisite step in `make typecheck`, and re-verified
+  locally after deleting `app/.next` to rule out hiding behind the same
+  stale-artifact trap that caused the bug in the first place.
+- **Docker is not installed on this machine.** `docker-compose.yml`
+  exists and is believed correct (standard Postgres 16 service,
+  healthcheck, named volume) but has never actually been run. Phase 2
+  needs `docker compose up -d` to work before migrations can be tested
+  locally — installing Docker Desktop is a heavier, more invasive action
+  (system daemon/VM) than installing `uv` was, so it wasn't done without
+  asking. Whoever picks up Phase 2 should either get Docker installed on
+  this machine or point `DATABASE_URL` at the real Neon instance for
+  local dev too (once that account exists).
 
 **Deliberately deferred:**
 
-- **No GitHub repo created yet, nothing pushed.** Phase 1's gate also
-  says "CI green," which can't be proven until a repo exists and a push
-  triggers `.github/workflows/guardrails.yml` for real. Creating a public
-  repo and pushing code is a visible/shared-state action, so it's being
-  asked about explicitly rather than assumed from the general "run phase
-  1" go-ahead — see chat.
 - Accounts not yet created by the user: Neon, Vercel, Telegram bot,
   Resend, Tiingo (list + signup steps were given in the Phase-0
   first-message-back). None of them block Phase 2's start, only later
@@ -105,7 +122,7 @@ session transcript, not summarized.
   text; it just never fires as its own branch. Not a bug, just worth a
   future reader not being confused by it.
 
-**Exact next action:** get explicit go-ahead on GitHub repo creation +
-push (asked in chat), push, confirm CI goes green on the real Actions
-run, paste that proof, then re-tag/re-verify Phase 1 as fully gated
-before starting Phase 2 (Schema).
+**Exact next action:** tag `phase-1-complete`, push the tag, then start
+Phase 2 (Schema) — migrations, constraints including the OCR `CHECK`,
+indexes, seed `issuers` from the SEC ticker map. Phase 2 will need either
+Docker working locally or a Neon connection string (see "Known defects").
