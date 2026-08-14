@@ -21,7 +21,7 @@ lint:
 
 typecheck:
 	cd $(PY_DIR) && $(UV) run mypy --strict ingest scoring research alerting
-	cd $(APP_DIR) && npx tsc --noEmit
+	cd $(APP_DIR) && npx next typegen && npx tsc --noEmit
 
 test:
 	cd $(PY_DIR) && $(UV) run pytest
