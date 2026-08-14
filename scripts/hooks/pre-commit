@@ -1,0 +1,5 @@
+#!/bin/sh
+# Installed by `make setup` into .git/hooks/pre-commit — PROMPT.md §0.A.4.
+set -e
+echo "pre-commit: running guardrails..."
+python3 "$(git rev-parse --show-toplevel)/scripts/guardrails.py"

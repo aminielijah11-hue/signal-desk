@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: signal-desk-postgres
+    environment:
+      POSTGRES_USER: signal_desk
+      POSTGRES_PASSWORD: signal_desk_local_dev
+      POSTGRES_DB: signal_desk
+    ports:
+      - "5432:5432"
+    volumes:
+      - signal_desk_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U signal_desk -d signal_desk"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  signal_desk_pgdata:
