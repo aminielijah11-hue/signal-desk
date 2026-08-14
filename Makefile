@@ -1,6 +1,6 @@
 .PHONY: setup lint typecheck test guardrails verify-phase ratchet db.up db.down
 
-UV := $(HOME)/.local/bin/uv
+UV := uv
 PY_DIR := py
 APP_DIR := app
 
